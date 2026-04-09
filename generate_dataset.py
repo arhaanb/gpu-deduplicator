@@ -34,7 +34,9 @@ def jpeg_recompress(img, quality):
     buf = BytesIO()
     img.save(buf, format="JPEG", quality=quality)
     buf.seek(0)
-    return Image.open(buf).copy()
+    result = Image.open(buf)
+    result.load()
+    return result
 
 
 def add_noise(img, intensity=10):
