@@ -20,7 +20,7 @@ NVCC_FLAGS = -O2 -std=c++17
 # Include source dir for stb headers
 NVCC_FLAGS += -I$(SRC_DIR)
 # Suppress stb warnings
-NVCC_FLAGS += -Xcompiler "-w"
+NVCC_FLAGS += -w -Xcompiler "-w"
 
 # Architecture flags (adjust for your GPU)
 # Default: generate for common architectures
