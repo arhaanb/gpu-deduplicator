@@ -207,7 +207,7 @@ void PrintUsage(const char* prog) {
 
 int main(int argc, char* argv[]) {
   // Parse arguments
-  float threshold = 0.95f;
+  float threshold = 0.97f;
   const char* output_file = nullptr;
   bool verbose = false;
   const char* input_dir = nullptr;

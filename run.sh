@@ -43,7 +43,7 @@ make -j
 echo ""
 echo "[3/3] Running deduplicator..."
 mkdir -p output
-./bin/gpu_dedup -v -t 0.92 -o "$OUTPUT_FILE" "$DATA_DIR"
+./bin/gpu_dedup -v -t 0.97 -o "$OUTPUT_FILE" "$DATA_DIR"
 
 echo ""
 echo "================================================"
