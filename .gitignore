@@ -1,0 +1,19 @@
+# Build artifacts
+bin/
+*.o
+*.exe
+
+# Data (too large for git)
+data/generated/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Assignment files
+*.pdf
+assignment.txt

@@ -1,0 +1,31 @@
+# Installation Instructions
+
+## Prerequisites
+
+- Linux (Ubuntu 18.04+ recommended) or compatible OS
+- NVIDIA GPU with compute capability 6.0+
+- CUDA Toolkit 11.0+ (includes nvcc compiler)
+- Python 3.6+ with pip (for dataset generation only)
+
+## Setup
+
+1. Install CUDA Toolkit:
+   Follow instructions at https://developer.nvidia.com/cuda-downloads
+
+2. Install Python dependencies (for test data generation):
+   pip3 install Pillow numpy
+
+3. Verify CUDA installation:
+   nvcc --version
+   nvidia-smi
+
+## Build
+
+   make
+
+## Run
+
+   ./run.sh
+
+   Or manually:
+   ./bin/gpu_dedup -v -t 0.92 <image_directory>
