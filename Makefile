@@ -40,7 +40,7 @@ $(BIN_DIR):
 	mkdir -p $(BIN_DIR)
 
 clean:
-	rm -rf $(BIN_DIR)
+	rm -rf $(BIN_DIR) output
 
 run: $(TARGET)
 	./run.sh
