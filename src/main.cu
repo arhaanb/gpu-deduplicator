@@ -1,12 +1,4 @@
-// GPU Image Deduplicator
-// Computes perceptual fingerprints on GPU and finds duplicate/near-duplicate images.
-//
-// Algorithm:
-//   1. Load all images, resize to a fixed thumbnail (32x32 grayscale)
-//   2. Upload all thumbnails to GPU memory
-//   3. Compute pairwise cosine similarity between all image pairs on GPU
-//   4. Threshold similarity scores to find duplicate clusters
-//   5. Report duplicate groups
+// GPU Image Deduplicator - finds near-duplicate images using CUDA
 
 #include <cmath>
 #include <cstdio>
@@ -23,11 +15,9 @@
 #define STB_IMAGE_RESIZE_IMPLEMENTATION
 #include "stb_image_resize2.h"
 
-// Thumbnail dimensions for fingerprinting
 static const int kThumbSize = 32;
 static const int kThumbPixels = kThumbSize * kThumbSize;
 
-// CUDA error checking macro
 #define CUDA_CHECK(call)                                                       \
   do {                                                                         \
     cudaError_t err = call;                                                    \
@@ -38,14 +28,7 @@ static const int kThumbPixels = kThumbSize * kThumbSize;
     }                                                                          \
   } while (0)
 
-// ---------------------------------------------------------------------------
-// CUDA Kernels
-// ---------------------------------------------------------------------------
-
-// Kernel: compute pairwise cosine similarity between all image fingerprints.
-// Each thread computes similarity for one pair (i, j) where j > i.
-// fingerprints: N x kThumbPixels array of normalized grayscale pixels
-// sim_matrix: N x N output similarity matrix
+// each thread handles one (i,j) pair from the upper triangle
 __global__ void CosineSimilarityKernel(const float* fingerprints,
                                        float* sim_matrix,
                                        int n, int dim) {
@@ -53,13 +36,11 @@ __global__ void CosineSimilarityKernel(const float* fingerprints,
   int total_pairs = (n * (n - 1)) / 2;
   if (idx >= total_pairs) return;
 
-  // Map linear index to (i, j) pair where j > i
-  // Using quadratic formula: i = floor((2*n-1 - sqrt((2*n-1)^2 - 8*idx)) / 2)
+  // map linear index to (i, j) via quadratic formula
   int i = static_cast<int>(
       floor((2.0 * n - 1.0 - sqrt((2.0 * n - 1.0) * (2.0 * n - 1.0) - 8.0 * idx)) / 2.0));
   int j = idx - i * (2 * n - i - 1) / 2 + i + 1;
 
-  // Compute cosine similarity: dot(a,b) / (|a| * |b|)
   float dot = 0.0f;
   float norm_a = 0.0f;
   float norm_b = 0.0f;
@@ -80,7 +61,6 @@ __global__ void CosineSimilarityKernel(const float* fingerprints,
   sim_matrix[j * n + i] = sim;
 }
 
-// Kernel: set diagonal of similarity matrix to 1.0
 __global__ void SetDiagonalKernel(float* sim_matrix, int n) {
   int idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx < n) {
@@ -88,11 +68,6 @@ __global__ void SetDiagonalKernel(float* sim_matrix, int n) {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Image loading utilities
-// ---------------------------------------------------------------------------
-
-// Check if a filename has a supported image extension
 bool IsSupportedImage(const std::string& filename) {
   std::string lower = filename;
   std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
@@ -104,7 +79,6 @@ bool IsSupportedImage(const std::string& filename) {
           lower.substr(lower.size() - 4) == ".tga");
 }
 
-// Recursively collect image file paths from a directory
 void CollectImagePaths(const std::string& dir_path,
                        std::vector<std::string>& paths) {
   DIR* dir = opendir(dir_path.c_str());
@@ -131,21 +105,19 @@ void CollectImagePaths(const std::string& dir_path,
   closedir(dir);
 }
 
-// Load an image, resize to kThumbSize x kThumbSize grayscale, normalize to [0,1]
+// resize to 32x32 grayscale, normalize to [0,1]
 bool LoadAndFingerprint(const std::string& path, float* out_fingerprint) {
   int w, h, channels;
-  unsigned char* img = stbi_load(path.c_str(), &w, &h, &channels, 1);  // force grayscale
+  unsigned char* img = stbi_load(path.c_str(), &w, &h, &channels, 1);
   if (!img) {
     fprintf(stderr, "Warning: failed to load %s\n", path.c_str());
     return false;
   }
 
-  // Resize to thumbnail
   unsigned char thumb[kThumbPixels];
   stbir_resize_uint8_linear(img, w, h, 0, thumb, kThumbSize, kThumbSize, 0,
                             STBIR_1CHANNEL);
 
-  // Normalize to [0, 1]
   for (int i = 0; i < kThumbPixels; ++i) {
     out_fingerprint[i] = static_cast<float>(thumb[i]) / 255.0f;
   }
@@ -154,10 +126,7 @@ bool LoadAndFingerprint(const std::string& path, float* out_fingerprint) {
   return true;
 }
 
-// ---------------------------------------------------------------------------
-// Duplicate clustering (Union-Find on CPU after GPU similarity computation)
-// ---------------------------------------------------------------------------
-
+// union-find with path compression and rank
 class UnionFind {
  public:
   explicit UnionFind(int n) : parent_(n), rank_(n, 0) {
@@ -185,15 +154,11 @@ class UnionFind {
   std::vector<int> rank_;
 };
 
-// ---------------------------------------------------------------------------
-// Usage / CLI
-// ---------------------------------------------------------------------------
-
 void PrintUsage(const char* prog) {
   printf("GPU Image Deduplicator\n");
   printf("Usage: %s [options] <image_directory>\n\n", prog);
   printf("Options:\n");
-  printf("  -t, --threshold <float>   Similarity threshold (0.0-1.0, default: 0.95)\n");
+  printf("  -t, --threshold <float>   Similarity threshold (0.0-1.0, default: 0.97)\n");
   printf("  -o, --output <file>       Write results to file (default: stdout)\n");
   printf("  -v, --verbose             Print detailed progress\n");
   printf("  -h, --help                Show this help message\n");
@@ -201,12 +166,7 @@ void PrintUsage(const char* prog) {
   printf("  %s -t 0.90 -v ./data/generated\n", prog);
 }
 
-// ---------------------------------------------------------------------------
-// Main
-// ---------------------------------------------------------------------------
-
 int main(int argc, char* argv[]) {
-  // Parse arguments
   float threshold = 0.97f;
   const char* output_file = nullptr;
   bool verbose = false;
@@ -232,7 +192,7 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
-  // ---- Step 1: Discover and load images ----
+  // discover and load images
   printf("Scanning directory: %s\n", input_dir);
   std::vector<std::string> image_paths;
   CollectImagePaths(input_dir, image_paths);
@@ -245,7 +205,6 @@ int main(int argc, char* argv[]) {
   }
   printf("Found %d images\n", n);
 
-  // Load and compute fingerprints on CPU
   if (verbose) printf("Loading and fingerprinting images...\n");
   std::vector<float> fingerprints(n * kThumbPixels);
   int loaded = 0;
@@ -259,7 +218,7 @@ int main(int argc, char* argv[]) {
   }
   printf("Successfully loaded %d / %d images\n", loaded, n);
 
-  // ---- Step 2: Upload fingerprints to GPU ----
+  // upload to GPU
   if (verbose) printf("Uploading fingerprints to GPU...\n");
 
   float* d_fingerprints = nullptr;
@@ -273,14 +232,13 @@ int main(int argc, char* argv[]) {
                          cudaMemcpyHostToDevice));
   CUDA_CHECK(cudaMemset(d_sim_matrix, 0, sim_bytes));
 
-  // ---- Step 3: Compute pairwise similarity on GPU ----
+  // pairwise similarity on GPU
   if (verbose) printf("Computing pairwise similarity on GPU...\n");
 
   int total_pairs = (n * (n - 1)) / 2;
   int block_size = 256;
   int grid_size = (total_pairs + block_size - 1) / block_size;
 
-  // Create CUDA events for timing
   cudaEvent_t start, stop;
   CUDA_CHECK(cudaEventCreate(&start));
   CUDA_CHECK(cudaEventCreate(&stop));
@@ -290,7 +248,6 @@ int main(int argc, char* argv[]) {
       d_fingerprints, d_sim_matrix, n, kThumbPixels);
   CUDA_CHECK(cudaGetLastError());
 
-  // Set diagonal
   int diag_grid = (n + block_size - 1) / block_size;
   SetDiagonalKernel<<<diag_grid, block_size>>>(d_sim_matrix, n);
   CUDA_CHECK(cudaGetLastError());
@@ -302,19 +259,18 @@ int main(int argc, char* argv[]) {
   CUDA_CHECK(cudaEventElapsedTime(&gpu_time_ms, start, stop));
   printf("GPU similarity computation: %.2f ms (%d pairs)\n", gpu_time_ms, total_pairs);
 
-  // ---- Step 4: Download results and find duplicate clusters ----
+  // download results
   if (verbose) printf("Downloading similarity matrix...\n");
   std::vector<float> sim_matrix(n * n);
   CUDA_CHECK(cudaMemcpy(sim_matrix.data(), d_sim_matrix, sim_bytes,
                          cudaMemcpyDeviceToHost));
 
-  // Free GPU memory
   CUDA_CHECK(cudaFree(d_fingerprints));
   CUDA_CHECK(cudaFree(d_sim_matrix));
   CUDA_CHECK(cudaEventDestroy(start));
   CUDA_CHECK(cudaEventDestroy(stop));
 
-  // Union-Find clustering
+  // cluster duplicates
   if (verbose) printf("Clustering duplicates (threshold=%.3f)...\n", threshold);
   UnionFind uf(n);
   int dup_pairs = 0;
@@ -327,7 +283,6 @@ int main(int argc, char* argv[]) {
     }
   }
 
-  // Group by cluster
   std::vector<std::vector<int>> clusters;
   std::vector<int> cluster_map(n, -1);
   for (int i = 0; i < n; ++i) {
@@ -339,13 +294,13 @@ int main(int argc, char* argv[]) {
     clusters[cluster_map[root]].push_back(i);
   }
 
-  // Filter to clusters with >1 member (actual duplicates)
+  // only keep groups with actual duplicates
   std::vector<std::vector<int>> dup_clusters;
   for (auto& c : clusters) {
     if (c.size() > 1) dup_clusters.push_back(c);
   }
 
-  // ---- Step 5: Output results ----
+  // output
   FILE* out = stdout;
   if (output_file) {
     out = fopen(output_file, "w");
@@ -373,7 +328,6 @@ int main(int argc, char* argv[]) {
       for (size_t k = 0; k < dup_clusters[g].size(); ++k) {
         int idx = dup_clusters[g][k];
         fprintf(out, "  [%d] %s\n", idx, image_paths[idx].c_str());
-        // Print similarity to first image in group
         if (k > 0) {
           int first = dup_clusters[g][0];
           fprintf(out, "       similarity to [%d]: %.4f\n", first,
@@ -384,7 +338,6 @@ int main(int argc, char* argv[]) {
     }
   }
 
-  // Summary
   int unique_count = 0;
   for (auto& c : clusters) {
     if (c.size() == 1) unique_count++;
